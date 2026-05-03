@@ -62,15 +62,15 @@ const distractingKeywordMessages = {
 
 const motivationalOverlayStyle = `
   position: absolute;
-  top: 0; left: 0;
-  width: 100%; height: 100%;
+  top: -10px; left: 0;
+  width: 100%; height: 105%;
   background: rgba(255, 255, 255, 0.85);
   backdrop-filter: blur(4px);
   display: flex;
   align-items: center;
   justify-content: center;
   text-align: center;
-  padding: 10px;
+  padding: 5px;
   font-size: 14px;
   font-weight: bold;
   color: #222;
