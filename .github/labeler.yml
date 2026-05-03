@@ -1,0 +1,55 @@
+# ========================
+# 📦 AREA LABELS
+# ========================
+
+area: core:
+  - "content.js"
+  - "src/content/**"
+
+area: ui:
+  - "popup.html"
+  - "popup.js"
+  - "src/ui/**"
+  - "styles/**"
+
+area: analytics:
+  - "**/stats/**"
+  - "**/tracking/**"
+  - "src/analytics/**"
+
+area: config:
+  - "manifest.json"
+  - ".github/**"
+
+area: assets:
+  - "icons/**"
+  - "*.png"
+  - "*.jpg"
+  - "*.jpeg"
+  - "*.svg"
+
+area: docs:
+  - "*.md"
+  - "docs/**"
+
+area: tests:
+  - "tests/**"
+  - "**/*.test.js"
+
+# ========================
+# 🛠 TYPE LABELS
+# ========================
+
+type: docs:
+  - "*.md"
+
+type: config:
+  - "manifest.json"
+  - ".github/**"
+
+type: tests:
+  - "tests/**"
+  - "**/*.test.js"
+
+good first issue:
+  - "beginner/**"
