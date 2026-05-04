@@ -79,6 +79,7 @@ const motivationalOverlayStyle = `
 `;
 
 let filterRunning = false;
+let isFilterEnabled = false;
 
 let stats = {
   filteredCount: 0,
@@ -335,7 +336,7 @@ const processVideo = async (item) => {
 };
 
 function applyFilter() {
-  if (filterRunning) return;
+  if (filterRunning || !isFilterEnabled) return;
   filterRunning = true;
 
   // Use requestAnimationFrame for smooth animations
@@ -374,76 +375,104 @@ function applyFilter() {
 // Modify observer to use Intersection Observer for scroll detection
 function initFilter() {
   try {
-    // Reset stats when filter is initialized
-    stats = {
-      filteredCount: 0,
-      educationalCount: 0,
-      totalVideos: 0,
-      watchTime: {
-        educational: 0,
-        entertainment: 0
-      }
-    };
-
-    filterRunning = false;
-    applyFilter();
-    trackVideoWatchTime();
-
-    // Create mutation observer for new content
-    const mutationObserver = new MutationObserver(() => {
-      if (!filterRunning) {
-        applyFilter();
+    // Check persist stats setting
+    chrome.storage.sync.get(['persistStats'], (result) => {
+      if (result.persistStats) {
+        // If persisting stats, load existing stats instead of resetting
+        chrome.storage.local.get(['videoStats'], (statsResult) => {
+          if (statsResult.videoStats) {
+            stats = { ...statsResult.videoStats };
+          } else {
+            // Fallback to reset if no stats exist
+            stats = {
+              filteredCount: 0,
+              educationalCount: 0,
+              totalVideos: 0,
+              watchTime: {
+                educational: 0,
+                entertainment: 0
+              }
+            };
+          }
+          initializeFilter();
+        });
+      } else {
+        // Reset stats when filter is initialized (if not persisting)
+        stats = {
+          filteredCount: 0,
+          educationalCount: 0,
+          totalVideos: 0,
+          watchTime: {
+            educational: 0,
+            entertainment: 0
+          }
+        };
+        initializeFilter();
       }
     });
 
-    // Create intersection observer for scroll detection
-    const intersectionObserver = new IntersectionObserver((entries) => {
-      const processEntries = async () => {
-        for (const entry of entries) {
-          if (entry.isIntersecting && !entry.target.hasAttribute('data-processed')) {
-            await processVideo(entry.target);
+    function initializeFilter() {
+      filterRunning = false;
+      applyFilter();
+      trackVideoWatchTime();
+
+      // Create mutation observer for new content
+      const mutationObserver = new MutationObserver(() => {
+        if (!filterRunning && isFilterEnabled) {
+          applyFilter();
+        }
+      });
+
+      // Create intersection observer for scroll detection
+      const intersectionObserver = new IntersectionObserver((entries) => {
+        const processEntries = async () => {
+          for (const entry of entries) {
+            if (entry.isIntersecting && !entry.target.hasAttribute('data-processed')) {
+              await processVideo(entry.target);
+            }
           }
+        };
+        processEntries().catch(error => console.log('Error processing entries:', error));
+      }, {
+        root: null,
+        rootMargin: '100px', // Increased margin for better pre-loading
+        threshold: 0.1
+      });
+
+      // Observe DOM changes
+      mutationObserver.observe(document.body, { 
+        childList: true, 
+        subtree: true 
+      });
+
+      // Function to observe new videos
+      const observeNewVideos = () => {
+        const unprocessedVideos = document.querySelectorAll(`
+          ytd-rich-item-renderer:not([data-processed]), 
+          ytd-video-renderer:not([data-processed]),
+          ytd-grid-video-renderer:not([data-processed])
+        `);
+        unprocessedVideos.forEach(video => {
+          intersectionObserver.observe(video);
+        });
+      };
+
+      // Observe initial videos
+      observeNewVideos();
+
+      // Add observer for new videos being added
+      const newVideoObserver = new MutationObserver(observeNewVideos);
+      newVideoObserver.observe(document.body, { childList: true, subtree: true });
+
+      return {
+        disconnect: () => {
+          mutationObserver.disconnect();
+          intersectionObserver.disconnect();
+          newVideoObserver.disconnect();
         }
       };
-      processEntries().catch(error => console.log('Error processing entries:', error));
-    }, {
-      root: null,
-      rootMargin: '100px', // Increased margin for better pre-loading
-      threshold: 0.1
-    });
-
-    // Observe DOM changes
-    mutationObserver.observe(document.body, { 
-      childList: true, 
-      subtree: true 
-    });
-
-    // Function to observe new videos
-    const observeNewVideos = () => {
-      const unprocessedVideos = document.querySelectorAll(`
-        ytd-rich-item-renderer:not([data-processed]), 
-        ytd-video-renderer:not([data-processed]),
-        ytd-grid-video-renderer:not([data-processed])
-      `);
-      unprocessedVideos.forEach(video => {
-        intersectionObserver.observe(video);
-      });
-    };
-
-    // Observe initial videos
-    observeNewVideos();
-
-    // Add observer for new videos being added
-    const newVideoObserver = new MutationObserver(observeNewVideos);
-    newVideoObserver.observe(document.body, { childList: true, subtree: true });
-
-    return {
-      disconnect: () => {
-        mutationObserver.disconnect();
-        intersectionObserver.disconnect();
-        newVideoObserver.disconnect();
-      }
-    };
+    }
+    return null;
   } catch (error) {
     console.log('Init filter error:', error);
     return null;
@@ -452,70 +481,101 @@ function initFilter() {
 
 let observer = null;
 chrome.storage.sync.get(["distractionFilterEnabled"], result => {
+  isFilterEnabled = !!result.distractionFilterEnabled;
   if (result.distractionFilterEnabled) {
-    if (observer) {
-      observer.disconnect();
+    if (window.currentObservers) {
+      window.currentObservers.mutation.disconnect();
+      window.currentObservers.intersection.disconnect();
+      window.currentObservers.newVideo.disconnect();
     }
-    observer = initFilter();
+    initFilter();
   }
 });
 
-// Modify chrome.storage.onChanged listener to clear stats when filter is disabled
+// Modify chrome.storage.onChanged listener to conditionally clear stats when filter is disabled
 chrome.storage.onChanged.addListener((changes, namespace) => {
   if (namespace === 'sync' && changes.distractionFilterEnabled) {
     if (changes.distractionFilterEnabled.newValue) {
-      if (observer) {
-        observer.disconnect();
+      isFilterEnabled = true;
+      if (window.currentObservers) {
+        window.currentObservers.mutation.disconnect();
+        window.currentObservers.intersection.disconnect();
+        window.currentObservers.newVideo.disconnect();
       }
-      observer = initFilter();
+      initFilter();
     } else {
-      if (observer) {
-        observer.disconnect();
-        observer = null;
+      isFilterEnabled = false;
+      if (window.currentObservers) {
+        window.currentObservers.mutation.disconnect();
+        window.currentObservers.intersection.disconnect();
+        window.currentObservers.newVideo.disconnect();
+        window.currentObservers = null;
       }
 
-      // Clear all stats from storage
-      chrome.storage.local.set({
-        videoStats: {
-          filteredCount: 0,
-          educationalCount: 0,
-          totalVideos: 0,
-          watchTime: {
-            educational: 0,
-            entertainment: 0
-          },
-          educationalPercentage: 0,
-          productivityScore: 0,
-          lastUpdated: Date.now()
+      // Check persist stats setting before clearing
+      chrome.storage.sync.get(['persistStats'], (result) => {
+        if (!result.persistStats) {
+          // Only clear stats if persist is disabled
+          chrome.storage.local.set({
+            videoStats: {
+              filteredCount: 0,
+              educationalCount: 0,
+              totalVideos: 0,
+              watchTime: {
+                educational: 0,
+                entertainment: 0
+              },
+              educationalPercentage: 0,
+              productivityScore: 0,
+              lastUpdated: Date.now()
+            }
+          });
+
+          // Reset stats object
+          stats = {
+            filteredCount: 0,
+            educationalCount: 0,
+            totalVideos: 0,
+            watchTime: {
+              educational: 0,
+              entertainment: 0
+            }
+          };
+
+          // Remove overlays and reset styles
+          document.querySelectorAll('.focus-filter-overlay').forEach(overlay => {
+            overlay.remove();
+          });
+
+          document.querySelectorAll('ytd-rich-item-renderer, ytd-video-renderer, ytd-grid-video-renderer').forEach(item => {
+            item.style.opacity = '';
+            item.style.pointerEvents = '';
+            item.removeAttribute('data-processed');
+
+            const thumbnails = item.querySelectorAll('ytd-channel-renderer img, img#img, yt-image img, ytd-thumbnail img, #thumbnail img');
+            thumbnails.forEach(thumbnail => {
+              thumbnail.style.display = '';
+              thumbnail.style.opacity = '';
+            });
+          });
+        } else {
+          // If persisting stats, just remove overlays and reset styles without clearing stats
+          document.querySelectorAll('.focus-filter-overlay').forEach(overlay => {
+            overlay.remove();
+          });
+
+          document.querySelectorAll('ytd-rich-item-renderer, ytd-video-renderer, ytd-grid-video-renderer').forEach(item => {
+            item.style.opacity = '';
+            item.style.pointerEvents = '';
+            item.removeAttribute('data-processed');
+
+            const thumbnails = item.querySelectorAll('ytd-channel-renderer img, img#img, yt-image img, ytd-thumbnail img, #thumbnail img');
+            thumbnails.forEach(thumbnail => {
+              thumbnail.style.display = '';
+              thumbnail.style.opacity = '';
+            });
+          });
         }
-      });
-
-      // Reset stats object
-      stats = {
-        filteredCount: 0,
-        educationalCount: 0,
-        totalVideos: 0,
-        watchTime: {
-          educational: 0,
-          entertainment: 0
-        }
-      };
-
-      // Remove overlays and reset styles
-      document.querySelectorAll('.focus-filter-overlay').forEach(overlay => {
-        overlay.remove();
-      });
-
-      document.querySelectorAll('ytd-rich-item-renderer, ytd-video-renderer, ytd-grid-video-renderer').forEach(item => {
-        item.style.opacity = '';
-        item.style.pointerEvents = '';
-        item.removeAttribute('data-processed');
-
-        const thumbnails = item.querySelectorAll('ytd-channel-renderer img, img#img, yt-image img, ytd-thumbnail img, #thumbnail img');
-        thumbnails.forEach(thumbnail => {
-          thumbnail.style.display = '';
-          thumbnail.style.opacity = '';
-        });
       });
     }
   }
@@ -531,9 +591,12 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       window.location.reload();
       return true;
     } else {
-      if (observer) {
-        observer.disconnect();
-        observer = null;
+      isFilterEnabled = false;
+      if (window.currentObservers) {
+        window.currentObservers.mutation.disconnect();
+        window.currentObservers.intersection.disconnect();
+        window.currentObservers.newVideo.disconnect();
+        window.currentObservers = null;
       }
       
       // Immediately remove all filter-related styles
