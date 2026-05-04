@@ -15,6 +15,7 @@ document.addEventListener('DOMContentLoaded', function () {
   loaderMessage.textContent = messages[Math.floor(Math.random() * messages.length)];
 
   const toggle = document.getElementById('toggleFilter');
+  const persistStatsToggle = document.getElementById('persistStats');
   const filteredCount = document.getElementById('filteredCount');
   const educationalCount = document.getElementById('educationalCount');
   const productivityScore = document.getElementById('productivityScore');
@@ -45,12 +46,13 @@ document.addEventListener('DOMContentLoaded', function () {
 
   // Load the current setting and stats
   Promise.all([
-    new Promise(resolve => chrome.storage.sync.get(['distractionFilterEnabled'], resolve)),
+    new Promise(resolve => chrome.storage.sync.get(['distractionFilterEnabled', 'persistStats'], resolve)),
     new Promise(resolve => chrome.storage.local.get(['videoStats'], resolve)),
     minimumLoaderTime
   ]).then(([settingsResult, statsResult]) => {
-    // Update toggle state
+    // Update toggle states
     toggle.checked = !!settingsResult.distractionFilterEnabled;
+    persistStatsToggle.checked = !!settingsResult.persistStats;
     
     // Update stats display
     if (statsResult.videoStats) {
@@ -82,6 +84,10 @@ document.addEventListener('DOMContentLoaded', function () {
     // Hide loader even if there's an error
     loaderContainer.style.display = 'none';
   });
+  // Listen for changes to the persist stats toggle
+  persistStatsToggle.addEventListener("change", () => {
+    chrome.storage.sync.set({ persistStats: persistStatsToggle.checked });
+  });
   // Listen for changes to the toggle switch
   toggle.addEventListener("change", () => {
     // Show loader when toggle changes
@@ -109,54 +115,88 @@ document.addEventListener('DOMContentLoaded', function () {
           }, 500);
         });
       } else {
-        // If disabling, clear stats and notify tabs
-        chrome.storage.local.set({
-          lastStats: {
-            filteredCount: 0,
-            educationalCount: 0,
-            totalVideos: 0,
-            educationalTime: '0 min',
-            educationalPercentage: 0,
-            productivityScore: 0,
-            timestamp: Date.now()
-          }
-        }, () => {
-          chrome.tabs.query({ url: "*://*.youtube.com/*" }, (tabs) => {
-            if (tabs.length > 0) {
-              const messagePromises = tabs.map(tab => {
-                return new Promise((resolve) => {
-                  chrome.tabs.sendMessage(
-                    tab.id, 
-                    { type: 'toggleFilter', enabled: false },
-                    (response) => {
-                      if (chrome.runtime.lastError) {
-                        console.log('Tab communication error:', chrome.runtime.lastError);
-                      }
-                      resolve();
-                    }
-                  );
-                });
-              });
+        // If disabling, check persist stats setting
+        chrome.storage.sync.get(['persistStats'], (result) => {
+          if (!result.persistStats) {
+            // Only reset stats if persist is disabled
+            chrome.storage.local.set({
+              lastStats: {
+                filteredCount: 0,
+                educationalCount: 0,
+                totalVideos: 0,
+                educationalTime: '0 min',
+                educationalPercentage: 0,
+                productivityScore: 0,
+                timestamp: Date.now()
+              }
+            }, () => {
+              chrome.tabs.query({ url: "*://*.youtube.com/*" }, (tabs) => {
+                if (tabs.length > 0) {
+                  const messagePromises = tabs.map(tab => {
+                    return new Promise((resolve) => {
+                      chrome.tabs.sendMessage(
+                        tab.id, 
+                        { type: 'toggleFilter', enabled: false },
+                        (response) => {
+                          if (chrome.runtime.lastError) {
+                            console.log('Tab communication error:', chrome.runtime.lastError);
+                          }
+                          resolve();
+                        }
+                      );
+                    });
+                  });
 
-              Promise.all(messagePromises).then(() => {
-                // Reset all stats displays to zero
-                filteredCount.textContent = '0';
-                educationalCount.textContent = '0';
-                totalVideos.textContent = '0';
-                educationalTime.textContent = '0 min';
-                educationalProgress.style.width = '0%';
-                educationalPercentage.textContent = '0%';
-                productivityScore.textContent = '0%';
-                
-                // Hide loader after processing
-                setTimeout(() => {
+                  Promise.all(messagePromises).then(() => {
+                    // Reset all stats displays to zero
+                    filteredCount.textContent = '0';
+                    educationalCount.textContent = '0';
+                    totalVideos.textContent = '0';
+                    educationalTime.textContent = '0 min';
+                    educationalProgress.style.width = '0%';
+                    educationalPercentage.textContent = '0%';
+                    productivityScore.textContent = '0%';
+
+                    // Hide loader after processing
+                    setTimeout(() => {
+                      loaderContainer.style.display = 'none';
+                    }, 500);
+                  });
+                } else {
                   loaderContainer.style.display = 'none';
-                }, 500);
+                }
               });
-            } else {
-              loaderContainer.style.display = 'none';
-            }
-          });
+            });
+          } else {
+            // If persisting stats, just notify tabs without resetting
+            chrome.tabs.query({ url: "*://*.youtube.com/*" }, (tabs) => {
+              if (tabs.length > 0) {
+                const messagePromises = tabs.map(tab => {
+                  return new Promise((resolve) => {
+                    chrome.tabs.sendMessage(
+                      tab.id, 
+                      { type: 'toggleFilter', enabled: false },
+                      (response) => {
+                        if (chrome.runtime.lastError) {
+                          console.log('Tab communication error:', chrome.runtime.lastError);
+                        }
+                        resolve();
+                      }
+                    );
+                  });
+                });
+
+                Promise.all(messagePromises).then(() => {
+                  // Hide loader
+                  setTimeout(() => {
+                    loaderContainer.style.display = 'none';
+                  }, 500);
+                });
+              } else {
+                loaderContainer.style.display = 'none';
+              }
+            });
+          }
         });
       }
     });
